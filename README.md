@@ -1,4 +1,4 @@
-# ESP32 蓝牙音频频谱灯（带 D 类功放）
+# ESP32 蓝牙音频频谱灯
 
 > 基于 ESP32 · Bluetooth A2DP 无线音频接收 · I2S 高保真 DAC 输出 · WS2812 实时频谱阵列
 > 作者：资深软硬件工程师 · 创业项目 / 开发板产品推介
@@ -233,7 +233,7 @@ MIT License（可根据创业产品需要调整）。
 
 ---
 
-# ESP32 Bluetooth Audio Spectrum Display (with Class-D Amplifier)
+# ESP32 Bluetooth Audio Spectrum Display 
 
 > Based on ESP32 · Bluetooth A2DP Wireless Audio Reception · I2S Hi-Fi DAC Output · WS2812 Real-Time Spectrum Array
 > Author: Senior Hardware & Software Engineer · Startup Project / Dev-Board Product Launch

@@ -184,14 +184,7 @@ lib_deps =
 
 > 说明：`BluetoothA2DPSink` 依赖 `ESP32-A2DP`；`AudioTools` 可选，按需引入；`esp-dsp` 随 ESP-IDF 一并提供。
 
-### 7.3 编译下载
-
-```bash
-pio run -t upload
-pio device monitor
-```
-
-### 7.4 配对使用
+### 7.3 配对使用
 
 1. 上电后串口打印 `BT ready, connect to 'MyMusic'`；
 2. 手机 / PC 搜索蓝牙设备 **"EP01"**（代码中 `a2dp_sink.start("EP01", true)`）；
@@ -200,30 +193,7 @@ pio device monitor
 
 ---
 
-## 八、目录结构
-
-```
-.
-├── main.cpp              # 主程序（单文件，全部逻辑）
-├── platformio.ini        # PlatformIO 构建配置
-├── README.md             # 本文件
-└── docs/                 # 原理图 / 3D 结构 / 演示视频（可扩展）
-```
-
----
-
-## 九、进阶扩展
-
-- [ ] 支持 **LE Audio / LC3**（ESP32 后续芯片 + 新版 Bluedroid）
-- [ ] 增加 **Web 配置页**（WiFi + WebSocket 实时调色 / 灵敏度）
-- [ ] 抽象接口：`IAudioSource` / `IFFTProcessor` / `IDisplayEffect` / `ILEDDriver`，配合 Builder 模式做可插拔效果库
-- [ ] 改用 **FFT 1024 点** 提升分辨率，或换 **CQT** 做对数频带（更符合听觉）
-- [ ] 加入 **Peak 峰值保持**（`peakHold[]` + `PEAK_DECAY=0.992`）实现峰值灯效
-- [ ] 3D 打印外壳 + 亚克力导光 + 产品化 PCB
-
----
-
-## 十、许可证
+## 八、许可证
 
 MIT License（可根据创业产品需要调整）。
 
@@ -418,14 +388,7 @@ lib_deps =
 
 > Notes: `BluetoothA2DPSink` depends on `ESP32-A2DP`; `AudioTools` is optional; `esp-dsp` ships with ESP-IDF.
 
-### 7.3 Build & Upload
-
-```bash
-pio run -t upload
-pio device monitor
-```
-
-### 7.4 Pairing & Usage
+### 7.3 Pairing & Usage
 
 1. After power-on, the serial port prints `BT ready, connect to 'MyMusic'`;
 2. Search for the Bluetooth device **"EP01"** on your phone/PC (`a2dp_sink.start("EP01", true)`);
@@ -434,29 +397,6 @@ pio device monitor
 
 ---
 
-## 8. Directory Structure
-
-```
-.
-├── main.cpp              # Main program (single file, all logic)
-├── platformio.ini        # PlatformIO build config
-├── README.md             # This file
-└── docs/                 # Schematics / 3D enclosure / demo video (extendable)
-```
-
----
-
-## 9. Future Enhancements
-
-- [ ] Support **LE Audio / LC3** (newer ESP32 chips + updated Bluedroid)
-- [ ] Add a **Web config page** (WiFi + WebSocket for real-time color / sensitivity tuning)
-- [ ] Abstract interfaces: `IAudioSource` / `IFFTProcessor` / `IDisplayEffect` / `ILEDDriver`, with Builder pattern for pluggable effects
-- [ ] Switch to **1024-point FFT** for higher resolution, or use **CQT** for logarithmic bands (more ear-friendly)
-- [ ] Add **Peak hold** (`peakHold[]` + `PEAK_DECAY=0.992`) for peak-light effects
-- [ ] 3D-printed enclosure + acrylic light guide + production-grade PCB
-
----
-
-## 10. License
+## 8. License
 
 MIT License (adjustable to fit the product's needs).

@@ -1,0 +1,282 @@
+#include "BluetoothA2DPSink.h"
+#include "ESP_I2S.h"
+#include <Arduino.h>
+#include <FastLED.h>
+#include <Preferences.h>
+#include <arduinoFFT.h>
+
+// ===================== 硬件引脚 =====================
+const uint8_t I2S_SCK = 25;
+const uint8_t I2S_WS = 27;
+const uint8_t I2S_SDOUT = 26;
+const uint8_t LED_PIN = 12;
+
+// ===================== 物理矩阵参数 (32列 x 8行) =====================
+#define PHYS_COLS 32
+#define PHYS_ROWS 8
+#define NUM_LEDS (PHYS_COLS * PHYS_ROWS)
+
+CRGB leds[NUM_LEDS];
+
+// ===================== 逻辑显示参数 =====================
+#define LOGIC_COLS 32
+#define LOGIC_ROWS 8
+
+// ===================== FFT 参数 =====================
+#define SAMPLES 512
+#define SAMPLING_FREQ 44100
+ArduinoFFT<double> FFT;
+
+double vReal[SAMPLES];
+double vImag[SAMPLES];
+
+// ===================== 音频环形缓冲区 =====================
+#define AUDIO_BUF_SIZE (SAMPLES * 2)
+int16_t audioBuf[AUDIO_BUF_SIZE];
+volatile int bufWritePos = 0;
+volatile int bufReadPos = 0;
+
+// ===================== 蓝牙与系统对象 =====================
+I2SClass i2s;
+BluetoothA2DPSink a2dp_sink(i2s);
+Preferences prefs;
+
+esp_a2d_connection_state_t last_state;
+uint16_t minutes = 5;
+unsigned long shutdown_ms = millis() + 1000UL * 60 * minutes;
+
+// ===================== 函数声明 =====================
+void on_data();
+void on_volume_change(int volume);
+void read_data_stream(const uint8_t *data, uint32_t length);
+void avrc_metadata_callback(uint8_t id, const uint8_t *text);
+void performFFTAndUpdateLEDs();
+int getLEDIndex(int physCol, int physRow);
+
+// ===================== 物理蛇形索引 (32列 x 8行) =====================
+int getLEDIndex(int physCol, int physRow)
+{
+    int colFromRight = 31 - physCol;
+    if (colFromRight % 2 == 0)
+    {
+        return colFromRight * PHYS_ROWS + physRow;
+    }
+    else
+    {
+        return colFromRight * PHYS_ROWS + (PHYS_ROWS - 1 - physRow);
+    }
+}
+
+// ===================== 回调实现 =====================
+void on_data()
+{
+    shutdown_ms = millis() + 1000UL * 60 * minutes;
+}
+
+void on_volume_change(int volume)
+{
+    prefs.putUChar("vol", (uint8_t)volume);
+    printf("Volume changed: %d, saved to NVS\r\n", volume);
+}
+
+void read_data_stream(const uint8_t *data, uint32_t length)
+{
+    int16_t *samples = (int16_t *)data;
+    uint32_t numFrames = length / 4;
+    for (uint32_t i = 0; i < numFrames; i++)
+    {
+        int16_t left = samples[i * 2];
+        int16_t right = samples[i * 2 + 1];
+        int16_t mono = (left + right) / 2;
+        int nextPos = (bufWritePos + 1) % AUDIO_BUF_SIZE;
+        if (nextPos != bufReadPos)
+        {
+            audioBuf[bufWritePos] = mono;
+            bufWritePos = nextPos;
+        }
+        else
+        {
+            bufReadPos = (bufReadPos + 1) % AUDIO_BUF_SIZE;
+            audioBuf[bufWritePos] = mono;
+            bufWritePos = nextPos;
+        }
+    }
+}
+
+void avrc_metadata_callback(uint8_t id, const uint8_t *text)
+{
+    printf("==> AVRC metadata rsp: attribute id 0x%x, %s\n", id, text);
+    if (id == ESP_AVRC_MD_ATTR_PLAYING_TIME)
+    {
+        uint32_t playtime = String((char *)text).toInt();
+        printf("==> Playing time is %d ms (%d seconds)\n", playtime, (int)round(playtime / 1000.0));
+    }
+}
+
+// ===================== FFT 处理与 LED 更新 =====================
+void performFFTAndUpdateLEDs()
+{
+    int available = (bufWritePos - bufReadPos + AUDIO_BUF_SIZE) % AUDIO_BUF_SIZE;
+    if (available < SAMPLES)
+        return;
+
+    for (int i = 0; i < SAMPLES; i++)
+    {
+        vReal[i] = (double)audioBuf[bufReadPos];
+        vImag[i] = 0.0;
+        bufReadPos = (bufReadPos + 1) % AUDIO_BUF_SIZE;
+    }
+
+    FFT.windowing(vReal, SAMPLES, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+    FFT.compute(vReal, vImag, SAMPLES, FFT_FORWARD);
+    FFT.complexToMagnitude(vReal, vImag, SAMPLES);
+
+    // 计算每个频段的原始能量
+    double rawEnergy[LOGIC_COLS] = {0};
+    int binsPerBand = (SAMPLES / 2) / LOGIC_COLS; // 8
+
+    for (int band = 0; band < LOGIC_COLS; band++)
+    {
+        double sum = 0.0;
+        int startBin = band * binsPerBand;
+        int endBin = startBin + binsPerBand;
+        if (endBin > SAMPLES / 2)
+            endBin = SAMPLES / 2;
+        for (int b = startBin; b < endBin; b++)
+        {
+            sum += vReal[b];
+        }
+        rawEnergy[band] = sum / binsPerBand;
+    }
+
+    // 3点滑动平均平滑频谱
+    double smoothed[LOGIC_COLS];
+    for (int i = 0; i < LOGIC_COLS; i++)
+    {
+        double sum = rawEnergy[i];
+        int count = 1;
+        if (i > 0)
+        {
+            sum += rawEnergy[i - 1];
+            count++;
+        }
+        if (i < LOGIC_COLS - 1)
+        {
+            sum += rawEnergy[i + 1];
+            count++;
+        }
+        smoothed[i] = sum / count;
+    }
+
+    // ★★★ 修改点1：找最大幅度时跳过前两列（i=2开始）★★★
+    double maxMag = 1.0;
+    for (int i = 2; i < LOGIC_COLS; i++)
+    {
+        if (smoothed[i] > maxMag)
+            maxMag = smoothed[i];
+    }
+    if (maxMag < 1.0)
+        maxMag = 1.0;
+
+    // 清空所有LED
+    FastLED.clear();
+
+    // ★★★ 修改点2：绘制时跳过前两列（lCol从2开始）★★★
+    for (int lCol = 2; lCol < LOGIC_COLS; lCol++)
+    {
+        double normalized = smoothed[lCol] / maxMag;
+        double scaled = log10(1.0 + 9.0 * normalized);
+        int height = (int)(scaled * LOGIC_ROWS);
+        if (height > LOGIC_ROWS)
+            height = LOGIC_ROWS;
+        if (height < 0)
+            height = 0;
+
+        for (int lRow = 0; lRow < height; lRow++)
+        {
+            int idx = getLEDIndex(lCol, lRow);
+            uint8_t hue = map(lRow, 0, LOGIC_ROWS - 1, 0, 200);
+            leds[idx] = CHSV(hue, 235, 205);
+        }
+    }
+
+    FastLED.show();
+}
+
+// ===================== 初始化 =====================
+void setup()
+{
+    printf("Starting...\n");
+
+    FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+    FastLED.setBrightness(40);
+    FastLED.clear();
+    FastLED.show();
+
+    i2s.setPins(I2S_SCK, I2S_WS, I2S_SDOUT);
+    if (!i2s.begin(I2S_MODE_STD, SAMPLING_FREQ, I2S_DATA_BIT_WIDTH_16BIT,
+                   I2S_SLOT_MODE_STEREO, I2S_STD_SLOT_BOTH))
+    {
+        printf("Failed to initialize I2S!\r\n");
+        while (1)
+            delay(100);
+    }
+
+    esp_bluedroid_config_t bluedroid_cfg = {};
+    bluedroid_cfg.ssp_en = false;
+    a2dp_sink.set_bluedroid_config_t(bluedroid_cfg);
+
+    a2dp_sink.set_on_data_received(on_data);
+    a2dp_sink.set_stream_reader(read_data_stream);
+    a2dp_sink.set_avrc_metadata_callback(avrc_metadata_callback);
+    a2dp_sink.set_avrc_rn_volumechange(on_volume_change);
+
+    uint8_t last_vol = prefs.getUChar("vol", 30);
+    a2dp_sink.set_volume(last_vol);
+    printf("Restored volume: %d\r\n", last_vol);
+
+    a2dp_sink.start("MyMusic", true);
+
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
+    esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(uint8_t));
+    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_FIXED;
+    esp_bt_pin_code_t pin_code;
+    memset(pin_code, 0, sizeof(pin_code));
+    const char *pwd = "1234";
+    memcpy(pin_code, pwd, strlen(pwd));
+    esp_bt_gap_set_pin(pin_type, strlen(pwd), pin_code);
+
+    printf("BT Start complete. Waiting for connection...\n");
+}
+
+// ===================== 主循环 =====================
+void loop()
+{
+    if (millis() > shutdown_ms)
+    {
+        printf("Shutting down due to inactivity\n");
+        FastLED.clear();
+        FastLED.show();
+        esp_deep_sleep_start();
+    }
+
+    esp_a2d_connection_state_t state = a2dp_sink.get_connection_state();
+    if (last_state != state)
+    {
+        bool is_connected = (state == ESP_A2D_CONNECTION_STATE_CONNECTED);
+        printf("%s\n", is_connected ? "Connected" : "Not connected");
+        last_state = state;
+        if (!is_connected)
+        {
+            FastLED.clear();
+            FastLED.show();
+        }
+    }
+
+    if (state == ESP_A2D_CONNECTION_STATE_CONNECTED)
+    {
+        performFFTAndUpdateLEDs();
+    }
+
+    delay(5);
+}
